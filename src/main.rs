@@ -10,12 +10,14 @@ use std::io::prelude::*;
 use std::{error::Error, io};
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    text::{Span, Spans},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
+
+const NYAA_URL: &str = "https://nyaa-api.fly.dev";
 
 fn open_url(url: &str) {
     use std::process::Command;
@@ -40,14 +42,18 @@ impl Params {
         }
     }
 
-    pub fn next_page(&mut self) {
+    pub fn next_page_by(&mut self, amount: u16) {
         let page = self.page;
-        self.page = if page < 1000 { page + 1 } else { 1000 }
+        self.page = if page + amount < 1000 {
+            page + amount
+        } else {
+            1000
+        }
     }
 
-    pub fn prev_page(&mut self) {
+    pub fn prev_page_by(&mut self, amount: u16) {
         let page = self.page;
-        self.page = if page > 1 { self.page - 1 } else { 0 }
+        self.page = if page <= amount { 0 } else { page - amount }
     }
 
     pub fn set_query<S: Into<String> + std::fmt::Display>(&mut self, query: S) {
@@ -118,13 +124,13 @@ impl App {
         self.state.select(last);
     }
 
-    pub fn next(&mut self) {
+    pub fn next_by(&mut self, amount: usize) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.items.len() - 1 {
+                if i + amount >= self.items.len() - 1 {
                     self.items.len() - 1
                 } else {
-                    i + 1
+                    i + amount
                 }
             }
             None => 0,
@@ -133,13 +139,13 @@ impl App {
         self.state.select(Some(i));
     }
 
-    pub fn previous(&mut self) {
+    pub fn previous_by(&mut self, amount: usize) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i == 0 {
+                if amount >= i {
                     0
                 } else {
-                    i - 1
+                    i - amount
                 }
             }
             None => 0,
@@ -202,7 +208,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn get_items(params: &Params) -> Result<Responses, Box<dyn Error>> {
     let client = reqwest::Client::new();
     let query = client
-        .get("http://localhost:3000")
+        .get(NYAA_URL)
         .query(&[("p", params.page.to_string()), ("q", params.query.clone())]);
     let res = query.send().await?.json::<Responses>().await?;
 
@@ -214,24 +220,40 @@ async fn run_app<B: Backend>(
     mut app: App,
     params: &mut Params,
 ) -> Result<(), Box<dyn Error>> {
+    let mut amount = String::from("");
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
-
         if let Event::Key(key) = event::read()? {
             match key.code {
+                KeyCode::Char('9') => amount.push('9'),
+                KeyCode::Char('8') => amount.push('8'),
+                KeyCode::Char('7') => amount.push('7'),
+                KeyCode::Char('6') => amount.push('6'),
+                KeyCode::Char('5') => amount.push('5'),
+                KeyCode::Char('4') => amount.push('4'),
+                KeyCode::Char('3') => amount.push('3'),
+                KeyCode::Char('2') => amount.push('2'),
+                KeyCode::Char('1') => amount.push('1'),
+                KeyCode::Char('0') => amount.push('0'),
                 KeyCode::Char('q') => return Ok(()),
-                KeyCode::Down | KeyCode::Char('j') => app.next(),
-                KeyCode::Up | KeyCode::Char('k') => app.previous(),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.next_by(amount.parse::<usize>().unwrap_or(1));
+                    amount = String::default();
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.previous_by(amount.parse::<usize>().unwrap_or(1));
+                    amount = String::default();
+                }
                 KeyCode::Char('G') => app.last_item(),
                 KeyCode::Char('g') => app.first_item(),
                 KeyCode::Char('n') => {
-                    params.next_page();
+                    params.next_page_by(amount.parse::<u16>().unwrap_or(1));
                     let items = get_items(params).await?;
                     app.update_items(items);
                     terminal.draw(|f| ui(f, &mut app))?;
                 }
                 KeyCode::Char('p') => {
-                    params.prev_page();
+                    params.prev_page_by(amount.parse::<u16>().unwrap_or(1));
                     let items = get_items(params).await?;
                     app.update_items(items);
                     terminal.draw(|f| ui(f, &mut app))?;
@@ -274,6 +296,12 @@ async fn run_app<B: Backend>(
                     app.update_items(items);
                     terminal.draw(|f| ui(f, &mut app))?;
                 }
+                KeyCode::Char('h') => loop {
+                    terminal.draw(|f| popup_ui(f))?;
+                    if let Event::Key(_) = event::read()? {
+                        break;
+                    }
+                },
                 KeyCode::Char('s') => {
                     let id = app.items[app.current.unwrap_or(0)]
                         .id
@@ -342,12 +370,33 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
         .widths(&[
-            Constraint::Min(8),
-            Constraint::Min(60),
-            Constraint::Min(10),
-            Constraint::Min(10),
-            Constraint::Min(7),
-            Constraint::Min(9),
+            Constraint::Percentage(2),
+            Constraint::Percentage(70),
+            Constraint::Percentage(9),
+            Constraint::Percentage(8),
+            Constraint::Percentage(5),
+            Constraint::Percentage(5),
         ]);
     f.render_stateful_widget(t, rects[0], &mut app.state);
+}
+
+fn popup_ui<B: Backend>(f: &mut Frame<B>) {
+    let size = f.size();
+
+    const HELP_TEXT: &str = "
+/ to search
+s to mark the current spot as viewed until
+<number> n to go to the next page (like 5n to go 5 more pages)
+<number> p to go to the prev page (like 5p to go 5 fewer pages)
+<number> j or down arrow to go down one item.
+<number> k or up arrow to up one item.
+o to open the selected item in the web browser.
+m to open up the selected item's magnet link.
+t to open up the selected item's torrent link.
+";
+    let paragraph = Paragraph::new(Span::from(HELP_TEXT))
+        .block(Block::default().borders(Borders::ALL))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    f.render_widget(paragraph, size);
 }
